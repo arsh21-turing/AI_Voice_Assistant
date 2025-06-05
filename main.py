@@ -3,7 +3,7 @@ from speech.recognition import VoiceRecognizer
 from speech.synthesis import VoiceSynthesizer
 from core.voice_engine import VoiceEngine
 from core.assistant_manager import AssistantManager
-from rag.retriever import ManualRetriever
+from rag import QueryProcessor, ContextRetriever, ResponseGenerator, ManualRetriever
 import time
 
 def main():
