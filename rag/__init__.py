@@ -1,44 +1,26 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-RAG (Retrieval-Augmented Generation) system components.
+RAG (Retrieval-Augmented Generation) module for the Voice-Powered Car Assistant.
 
-This package provides the core components for the RAG system:
-- QueryProcessor: Processes and analyzes user queries
-- ContextRetriever: Retrieves relevant context from the knowledge base
-- ResponseGenerator: Generates natural language responses from context
-- ManualRetriever: Orchestrates the complete RAG pipeline
+This module provides the public API for the RAG components, including the
+ManualRetriever, QueryProcessor, ContextRetriever, and ResponseGenerator.
 """
 
-# Package metadata
-__version__ = '0.1.0'
-__author__ = 'Voice-Powered Car Assistant Team'
+# Import from project modules
+from rag.retriever import ManualRetriever, ContextRetriever
+from rag.processor import QueryProcessor
+from rag.generator import ResponseGenerator
+from rag.context import ContextManager
+from rag.templates import PromptTemplateManager
 
-# Import public classes
-from .processor import QueryProcessor
-from .context import ContextRetriever
-from .generator import ResponseGenerator
-from .retriever import ManualRetriever
+# Version information
+__version__ = "0.1.0"
 
-# Define public API
+# Public exports
 __all__ = [
+    'ManualRetriever',
     'QueryProcessor',
     'ContextRetriever',
     'ResponseGenerator',
-    'ManualRetriever'
+    'ContextManager',
+    'PromptTemplateManager',
 ]
-
-# Package initialization
-def get_version():
-    """Return the package version."""
-    return __version__
-
-def get_components():
-    """Return a dictionary of available RAG components."""
-    return {
-        'QueryProcessor': 'Processes and analyzes user queries',
-        'ContextRetriever': 'Retrieves relevant context from the knowledge base',
-        'ResponseGenerator': 'Generates natural language responses from context',
-        'ManualRetriever': 'Orchestrates the complete RAG pipeline'
-    }

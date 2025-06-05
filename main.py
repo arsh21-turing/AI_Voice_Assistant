@@ -4,10 +4,19 @@ from speech.synthesis import VoiceSynthesizer
 from core.voice_engine import VoiceEngine
 from core.assistant_manager import AssistantManager
 from rag import QueryProcessor, ContextRetriever, ResponseGenerator, ManualRetriever
+from config.settings import config
 import time
 
 def main():
     print("Initializing Voice-Powered Car Assistant...")
+    
+    # Test configuration
+    try:
+        api_key = config.get('API_SETTINGS', 'GROQ_API_KEY')
+        print(f"Configuration loaded successfully. API Key: {api_key[:8]}...")
+    except Exception as e:
+        print(f"Configuration error: {str(e)}")
+        return
     
     # Initialize components
     recognizer = VoiceRecognizer()
