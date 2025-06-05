@@ -302,5 +302,169 @@ class TestRAGPipeline(unittest.TestCase):
         self.assertNotEqual(info_response, howto_response, 
                            "Different query types should get different responses")
 
+    def test_maintenance_procedures(self):
+        """Test handling of maintenance procedure queries."""
+        maintenance_queries = [
+            "How do I change the oil filter?",
+            "What's the procedure for replacing brake pads?",
+            "How often should I rotate my tires?",
+            "What's the maintenance schedule for my transmission?",
+            "How do I check my brake fluid level?"
+        ]
+        
+        for query in maintenance_queries:
+            # Process query
+            processed_query, query_type, entities = self.query_processor.preprocess_query(query)
+            
+            # Verify query type
+            self.assertEqual(query_type, "maintenance", 
+                            f"Query should be classified as maintenance: {query}")
+            
+            # Verify entities
+            self.assertTrue(entities.get("parts"), 
+                           f"Maintenance query should identify parts: {query}")
+            self.assertTrue(entities.get("actions"), 
+                           f"Maintenance query should identify actions: {query}")
+            
+            # Test context retrieval
+            context_chunks = self.context_retriever.retrieve(processed_query)
+            self.assertTrue(context_chunks, 
+                           f"Should retrieve maintenance context: {query}")
+            
+            # Verify context relevance
+            for chunk in context_chunks:
+                self.assertGreaterEqual(chunk.get("relevance_score", 0), 0.5,
+                                      f"Context should be relevant: {query}")
+
+    def test_troubleshooting_workflows(self):
+        """Test handling of troubleshooting queries."""
+        troubleshooting_queries = [
+            "My engine is making a strange noise",
+            "The check engine light is on",
+            "My brakes are squeaking",
+            "The car won't start",
+            "There's a leak under my car"
+        ]
+        
+        for query in troubleshooting_queries:
+            # Process query
+            processed_query, query_type, entities = self.query_processor.preprocess_query(query)
+            
+            # Verify query type
+            self.assertEqual(query_type, "troubleshooting", 
+                            f"Query should be classified as troubleshooting: {query}")
+            
+            # Verify entities
+            self.assertTrue(entities.get("symptoms"), 
+                           f"Troubleshooting query should identify symptoms: {query}")
+            self.assertTrue(entities.get("systems") or entities.get("parts"), 
+                           f"Troubleshooting query should identify affected systems/parts: {query}")
+            
+            # Test context retrieval
+            context_chunks = self.context_retriever.retrieve(processed_query)
+            self.assertTrue(context_chunks, 
+                           f"Should retrieve troubleshooting context: {query}")
+            
+            # Verify context relevance
+            for chunk in context_chunks:
+                self.assertGreaterEqual(chunk.get("relevance_score", 0), 0.5,
+                                      f"Context should be relevant: {query}")
+
+    def test_safety_warnings(self):
+        """Test handling of safety-related queries."""
+        safety_queries = [
+            "Is it safe to drive with the check engine light on?",
+            "What should I do if my brakes feel soft?",
+            "Is it dangerous if my airbag light is on?",
+            "What's the warning sign for low brake fluid?",
+            "How do I know if my tires are unsafe?"
+        ]
+        
+        for query in safety_queries:
+            # Process query
+            processed_query, query_type, entities = self.query_processor.preprocess_query(query)
+            
+            # Verify query type
+            self.assertEqual(query_type, "safety", 
+                            f"Query should be classified as safety: {query}")
+            
+            # Verify entities
+            self.assertTrue(entities.get("parts") or entities.get("systems"), 
+                           f"Safety query should identify relevant parts/systems: {query}")
+            
+            # Test context retrieval
+            context_chunks = self.context_retriever.retrieve(processed_query)
+            self.assertTrue(context_chunks, 
+                           f"Should retrieve safety context: {query}")
+            
+            # Verify context relevance
+            for chunk in context_chunks:
+                self.assertGreaterEqual(chunk.get("relevance_score", 0), 0.5,
+                                      f"Context should be relevant: {query}")
+
+    def test_technical_terms(self):
+        """Test handling of technical terminology."""
+        technical_queries = [
+            "What is a catalytic converter?",
+            "Explain what the OBD-II system does",
+            "What's the purpose of the PCV valve?",
+            "How does the EGR system work?",
+            "What is the function of the MAF sensor?"
+        ]
+        
+        for query in technical_queries:
+            # Process query
+            processed_query, query_type, entities = self.query_processor.preprocess_query(query)
+            
+            # Verify query type
+            self.assertEqual(query_type, "information", 
+                            f"Query should be classified as information: {query}")
+            
+            # Verify entities
+            self.assertTrue(entities.get("parts") or entities.get("systems"), 
+                           f"Technical query should identify parts/systems: {query}")
+            
+            # Test context retrieval
+            context_chunks = self.context_retriever.retrieve(processed_query)
+            self.assertTrue(context_chunks, 
+                           f"Should retrieve technical context: {query}")
+            
+            # Verify context relevance
+            for chunk in context_chunks:
+                self.assertGreaterEqual(chunk.get("relevance_score", 0), 0.5,
+                                      f"Context should be relevant: {query}")
+
+    def test_query_expansion(self):
+        """Test query expansion with automotive context."""
+        base_queries = [
+            "oil filter",
+            "brake pads",
+            "transmission fluid",
+            "spark plugs",
+            "air filter"
+        ]
+        
+        for query in base_queries:
+            # Process query
+            processed_query, query_type, entities = self.query_processor.preprocess_query(query)
+            
+            # Verify expanded query
+            self.assertGreater(len(processed_query.split()), len(query.split()),
+                             f"Query should be expanded: {query}")
+            
+            # Verify entities
+            self.assertTrue(entities.get("parts"), 
+                           f"Should identify parts: {query}")
+            
+            # Test context retrieval
+            context_chunks = self.context_retriever.retrieve(processed_query)
+            self.assertTrue(context_chunks, 
+                           f"Should retrieve expanded context: {query}")
+            
+            # Verify context relevance
+            for chunk in context_chunks:
+                self.assertGreaterEqual(chunk.get("relevance_score", 0), 0.5,
+                                      f"Context should be relevant: {query}")
+
 if __name__ == '__main__':
     unittest.main()

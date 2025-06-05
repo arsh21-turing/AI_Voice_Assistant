@@ -32,7 +32,7 @@ class VectorStore:
     semantic search over document collections.
     """
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2", index_path: Optional[str] = None):
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", index_path: str = "data/vector_store"):
         """
         Initialize the VectorStore.
         
@@ -41,183 +41,164 @@ class VectorStore:
             index_path: Path to load an existing FAISS index (optional)
         """
         self.model_name = model_name
-        self.embedding_model = None
-        self.index = None
-        self.documents = []  # List of document texts
-        self.metadatas = []  # List of metadata dictionaries
+        self.index_path = index_path
+        self.logger = logging.getLogger(__name__)
         
-        logger.info(f"Initializing VectorStore with model: {model_name}")
-        
-        # Initialize the embedding model
-        self._init_embedding_model()
-        
-        # Load existing index if provided
-        if index_path:
-            self.load(index_path)
-    
-    def _init_embedding_model(self):
-        """Initialize the embedding model."""
+        # Initialize embedding model
         try:
-            self.embedding_model = SentenceTransformer(self.model_name)
-            logger.info(f"Initialized embedding model: {self.model_name}")
+            self.embedding_model = SentenceTransformer(model_name)
+            self.logger.info(f"Initialized embedding model: {model_name}")
         except Exception as e:
-            logger.error(f"Error initializing embedding model: {e}")
+            self.logger.error(f"Failed to initialize embedding model: {e}")
+            raise
+            
+        # Initialize or load FAISS index
+        try:
+            self._initialize_index()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize FAISS index: {e}")
+            raise
+            
+        # Store document metadata
+        self.documents = []
+    
+    def _initialize_index(self):
+        """Initialize or load the FAISS index."""
+        try:
+            # Ensure directory exists
+            os.makedirs(self.index_path, exist_ok=True)
+            
+            index_file = os.path.join(self.index_path, "index.faiss")
+            metadata_file = os.path.join(self.index_path, "metadata.json")
+            
+            if os.path.exists(index_file) and os.path.exists(metadata_file):
+                # Load existing index
+                self.index = faiss.read_index(index_file)
+                # Load metadata
+                with open(metadata_file, "r") as f:
+                    self.documents = json.load(f)
+                self.logger.info(f"Loaded existing index from {self.index_path}")
+            else:
+                # Create new index
+                self.index = faiss.IndexFlatL2(384)  # 384 is the dimension for all-MiniLM-L6-v2
+                self.documents = []
+                
+                # Save empty index and metadata
+                faiss.write_index(self.index, index_file)
+                with open(metadata_file, "w") as f:
+                    json.dump(self.documents, f)
+                    
+                self.logger.info(f"Created new index at {self.index_path}")
+                
+        except Exception as e:
+            self.logger.error(f"Error initializing index: {e}")
             raise
     
-    def compute_embedding(self, text: str) -> np.ndarray:
-        """
-        Compute embedding for a text string.
-        
-        Args:
-            text: Text to embed
-            
-        Returns:
-            Vector representation of the text
-        """
-        if self.embedding_model is None:
-            self._init_embedding_model()
-            
-        try:
-            embedding = self.embedding_model.encode(text, convert_to_numpy=True)
-            return embedding
-        except Exception as e:
-            logger.error(f"Error computing embedding: {e}")
-            raise
-    
-    def batch_compute_embeddings(self, texts: List[str]) -> np.ndarray:
-        """
-        Compute embeddings for multiple texts.
-        
-        Args:
-            texts: List of text strings to embed
-            
-        Returns:
-            Matrix of embeddings
-        """
-        if self.embedding_model is None:
-            self._init_embedding_model()
-            
-        if not texts:
-            return np.array([])
-            
+    def compute_embeddings(self, texts: List[str]) -> np.ndarray:
+        """Compute embeddings for a list of texts."""
         try:
             embeddings = self.embedding_model.encode(texts, convert_to_numpy=True)
             return embeddings
         except Exception as e:
-            logger.error(f"Error computing batch embeddings: {e}")
+            self.logger.error(f"Error computing embeddings: {e}")
             raise
     
-    def add_documents(
-        self,
-        documents: Optional[List[Any]] = None,
-        texts: Optional[List[str]] = None,
-        metadatas: Optional[List[Dict[str, Any]]] = None
-    ) -> List[int]:
-        """
-        Add documents to the vector store.
-        
-        Args:
-            documents: List of document objects or text strings to add
-            texts: List of text strings if documents are not strings
-            metadatas: List of metadata dictionaries for each document
+    def add_documents(self, documents: List[Any]):
+        """Add documents to the vector store."""
+        try:
+            # Extract text and metadata
+            texts = []
+            metadata_list = []
             
-        Returns:
-            List of IDs of the added documents
-        """
-        # Determine the text content to embed
-        if texts is not None:
-            content_to_embed = texts
-        elif documents is not None:
-            content_to_embed = [str(doc) for doc in documents]
-        else:
-            logger.error("Either documents or texts must be provided")
-            return []
-        
-        # Ensure we have matching metadata
-        if metadatas is None:
-            metadatas = [{} for _ in content_to_embed]
-        
-        if len(metadatas) != len(content_to_embed):
-            logger.warning(f"Metadata count ({len(metadatas)}) doesn't match document count ({len(content_to_embed)}). Using empty metadata.")
-            metadatas = [{} for _ in content_to_embed]
-        
-        # Compute embeddings for the documents
-        embeddings = self.batch_compute_embeddings(content_to_embed)
-        
-        # Get document IDs (positions in the index)
-        start_id = len(self.documents)
-        doc_ids = list(range(start_id, start_id + len(content_to_embed)))
-        
-        # Create or update the FAISS index
-        if self.index is None:
-            # Create a new index
-            dimension = embeddings.shape[1]
-            self.index = faiss.IndexFlatL2(dimension)
-            logger.info(f"Created new FAISS index with dimension {dimension}")
-        
-        # Add the embeddings to the index
-        self.index.add(embeddings)
-        
-        # Store the documents and metadata
-        self.documents.extend(content_to_embed)
-        self.metadatas.extend(metadatas)
-        
-        logger.info(f"Added {len(content_to_embed)} documents to vector store")
-        return doc_ids
+            for doc in documents:
+                if hasattr(doc, 'page_content'):
+                    # LangChain Document
+                    text = doc.page_content
+                    metadata = doc.metadata
+                elif isinstance(doc, dict):
+                    # Dictionary with text key
+                    text = doc.get('text', '')
+                    metadata = {k: v for k, v in doc.items() if k != 'text'}
+                elif isinstance(doc, str):
+                    # Plain text
+                    text = doc
+                    metadata = {}
+                else:
+                    self.logger.warning(f"Unknown document format: {type(doc)}")
+                    continue
+                    
+                texts.append(text)
+                metadata_list.append(metadata)
+                
+            if not texts:
+                return
+                
+            # Compute embeddings
+            embeddings = self.compute_embeddings(texts)
+            
+            # Add to FAISS index
+            self.index.add(embeddings)
+            
+            # Store metadata
+            for text, metadata in zip(texts, metadata_list):
+                self.documents.append({
+                    'text': text,
+                    'metadata': metadata
+                })
+                
+            # Save index and metadata
+            self.save_index()
+            
+        except Exception as e:
+            self.logger.error(f"Error adding documents: {e}")
+            raise
     
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """
-        Search for similar documents using a query.
-        
-        Args:
-            query: Query text to search for
-            top_k: Number of results to return
-            
-        Returns:
-            List of top k results with text, metadata, and similarity scores
-        """
-        if self.index is None or len(self.documents) == 0:
-            logger.warning("No documents in vector store to search")
-            return []
-        
-        if not query:
-            logger.warning("Empty query provided")
-            return []
-            
+        """Search for similar documents."""
         try:
             # Compute query embedding
-            query_embedding = self.compute_embedding(query)
+            query_embedding = self.compute_embeddings([query])[0]
             
-            # Reshape for FAISS
-            query_embedding = query_embedding.reshape(1, -1)
-            
-            # Search the index
-            distances, indices = self.index.search(query_embedding, min(top_k, len(self.documents)))
+            # Search in FAISS index
+            distances, indices = self.index.search(
+                np.array([query_embedding]), 
+                min(top_k, len(self.documents))
+            )
             
             # Format results
             results = []
-            for i, doc_idx in enumerate(indices[0]):
-                if doc_idx < 0 or doc_idx >= len(self.documents):
-                    continue
+            for distance, idx in zip(distances[0], indices[0]):
+                if idx < len(self.documents):
+                    doc = self.documents[idx]
+                    # Convert distance to similarity score (0-1 range)
+                    similarity = float(np.exp(-distance))
+                    results.append({
+                        'text': doc['text'],
+                        'metadata': doc['metadata'],
+                        'score': similarity
+                    })
                     
-                # Calculate similarity score (convert distance to similarity)
-                # L2 distance -> similarity conversion
-                similarity = 1.0 / (1.0 + distances[0][i])
-                
-                result = {
-                    "id": int(doc_idx),
-                    "text": self.documents[doc_idx],
-                    "metadata": self.metadatas[doc_idx],
-                    "score": float(similarity)
-                }
-                results.append(result)
-            
-            logger.info(f"Found {len(results)} results for query")
             return results
             
         except Exception as e:
-            logger.error(f"Error searching vector store: {e}")
+            self.logger.error(f"Error searching documents: {e}")
             return []
+    
+    def save_index(self):
+        """Save the FAISS index and metadata."""
+        try:
+            # Save FAISS index
+            faiss.write_index(self.index, os.path.join(self.index_path, "index.faiss"))
+            
+            # Save metadata
+            with open(os.path.join(self.index_path, "metadata.json"), "w") as f:
+                json.dump(self.documents, f)
+                
+            self.logger.info(f"Saved index and metadata to {self.index_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving index: {e}")
+            raise
     
     def save(self, path: str):
         """
@@ -315,6 +296,6 @@ class VectorStore:
             
         return {
             "id": doc_id,
-            "text": self.documents[doc_id],
-            "metadata": self.metadatas[doc_id]
+            "text": self.documents[doc_id]['text'],
+            "metadata": self.documents[doc_id]['metadata']
         }

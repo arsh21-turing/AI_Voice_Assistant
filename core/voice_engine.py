@@ -7,6 +7,7 @@ Coordinates speech recognition, query processing, and speech synthesis.
 import logging
 import time
 from typing import Optional, Dict, Any, List, Tuple
+from enum import Enum
 
 # Import custom modules
 # These would be the actual imports in a real implementation
@@ -15,10 +16,20 @@ from speech.synthesis import VoiceSynthesizer
 from core.assistant_manager import AssistantManager
 from rag.retriever import ManualRetriever
 from rag.processor import QueryProcessor
+from utils.error_handler import ErrorHandler
+from utils.terminology import TerminologyManager
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+class QueryCategory(Enum):
+    """Categories for automotive queries."""
+    MAINTENANCE = "maintenance"
+    TROUBLESHOOTING = "troubleshooting"
+    SAFETY = "safety"
+    SPECIFICATION = "specification"
+    PROCEDURE = "procedure"
+    GENERAL = "general"
 
 class VoiceEngine:
     """
@@ -32,6 +43,8 @@ class VoiceEngine:
         synthesizer: VoiceSynthesizer,
         retriever: ManualRetriever,
         assistant: AssistantManager,
+        error_handler: Optional[ErrorHandler] = None,
+        terminology_manager: Optional[TerminologyManager] = None,
         log_level: int = logging.INFO,
     ):
         """
@@ -42,6 +55,8 @@ class VoiceEngine:
             synthesizer: Instance of VoiceSynthesizer for speech output
             retriever: Instance of ManualRetriever for document retrieval
             assistant: Instance of AssistantManager for conversation state
+            error_handler: Optional instance of ErrorHandler for error management
+            terminology_manager: Optional instance of TerminologyManager for term normalization
             log_level: Logging level (default: logging.INFO)
         """
         # Set up logger
@@ -54,19 +69,23 @@ class VoiceEngine:
         self.synthesizer = synthesizer
         self.retriever = retriever
         self.assistant = assistant
-        
-        # Create a mock processor for now (will be replaced with actual implementation)
-        self.processor = self._create_mock_processor()
+        self.error_handler = error_handler or ErrorHandler()
+        self.terminology_manager = terminology_manager or TerminologyManager()
         
         # Initialize state
         self.last_query = None
         self.last_response = None
         self.last_context = None
         self.is_processing = False
+        self.current_procedure = None
+        self.procedure_step = 0
         
         # Wake words and exit commands
         self.wake_words = ["hey car", "hey assistant", "car assistant", "hello assistant"]
         self.exit_commands = ["exit", "quit", "stop", "goodbye", "bye"]
+        
+        # Initialize query processor
+        self.query_processor = QueryProcessor(terminology_manager=self.terminology_manager)
         
         logger.info("VoiceEngine initialized successfully")
 
@@ -161,67 +180,252 @@ class VoiceEngine:
                 self.is_processing = False
                 return "Goodbye! Have a safe trip."
             
+            # Normalize technical terms
+            try:
+                normalized_query = self.terminology_manager.normalize_query(query)
+            except Exception as e:
+                logger.warning(f"Failed to normalize query: {str(e)}")
+                normalized_query = query  # Use original query if normalization fails
+            
             # Get conversation context from assistant
             context = self.assistant.get_context()
             logger.debug(f"Current context: {context}")
             
-            # Get relevant documents from retriever (if applicable)
-            if not self._is_simple_command(query):
-                logger.debug("Getting relevant documents")
-                docs = self.retriever.retrieve_documents(query)
-                
-                # Add documents to context
-                if docs:
-                    if "documents" not in context:
-                        context["documents"] = []
-                    context["documents"] = docs
-                    logger.debug(f"Retrieved {len(docs)} relevant documents")
-            else:
-                logger.debug("Query appears to be a simple command, skipping document retrieval")
+            # Process query to determine category and entities
+            try:
+                processed_query, query_type, entities = self.query_processor.preprocess_query(normalized_query)
+            except Exception as e:
+                logger.warning(f"Failed to preprocess query: {str(e)}")
+                processed_query = normalized_query
+                query_type = "general"
+                entities = {}
             
-            # Process the query
-            start_time = time.time()
-            response, updated_context = self.processor.process_query(query, context)
-            processing_time = time.time() - start_time
-            logger.debug(f"Query processed in {processing_time:.2f} seconds")
+            # Handle multi-step procedures
+            if self.current_procedure and self.procedure_step > 0:
+                response = self._handle_procedure_step(query, context)
+                return response
+            
+            # Route query based on category
+            if query_type == QueryCategory.MAINTENANCE.value:
+                response = self._handle_maintenance_query(processed_query, entities, context)
+            elif query_type == QueryCategory.TROUBLESHOOTING.value:
+                response = self._handle_troubleshooting_query(processed_query, entities, context)
+            elif query_type == QueryCategory.SAFETY.value:
+                response = self._handle_safety_query(processed_query, entities, context)
+            elif query_type == QueryCategory.PROCEDURE.value:
+                response = self._handle_procedure_query(processed_query, entities, context)
+            else:
+                response = self._handle_general_query(processed_query, context)
             
             # Update assistant context
-            self.assistant.update_context(updated_context)
+            self.assistant.update_context({
+                'last_query': query,
+                'query_type': query_type,
+                'entities': entities,
+                'response': response
+            })
             
             # Store the response and context
             self.last_response = response
-            self.last_context = updated_context
+            self.last_context = context
             
             logger.info(f"Response generated: '{response[:50]}{'...' if len(response) > 50 else ''}'")
             
             return response
             
         except Exception as e:
-            logger.error(f"Error processing query: {e}", exc_info=True)
-            self.is_processing = False
-            return "I'm sorry, I encountered an error while processing your request. Please try again."
+            error_msg = self.error_handler.handle_error(e, "query_processing")
+            logger.error(f"Error processing query: {error_msg}", exc_info=True)
+            return f"I'm sorry, I encountered an error while processing your request: {error_msg}"
         
         finally:
             self.is_processing = False
 
-    def _is_simple_command(self, query: str) -> bool:
-        """
-        Determine if a query is a simple command that doesn't need document retrieval.
-        
-        Args:
-            query: The query to check
+    def _handle_maintenance_query(self, query: str, entities: Dict[str, List[str]], context: Dict[str, Any]) -> str:
+        """Handle maintenance-related queries."""
+        try:
+            # Get relevant maintenance information
+            docs = self.retriever.retrieve_documents(query, category="maintenance")
             
-        Returns:
-            bool: True if the query is a simple command
-        """
-        query = query.lower()
-        simple_command_indicators = [
-            "play", "stop", "pause", "resume", "volume", "louder", "quieter",
-            "temperature", "warmer", "colder", "call", "dial", "navigate to",
-            "open", "close", "lock", "unlock", "turn on", "turn off"
-        ]
+            if not docs:
+                return "I couldn't find specific maintenance information for that. Could you please rephrase your question?"
+            
+            # Process the documents to generate response
+            response = self._generate_maintenance_response(docs, entities)
+            return response
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "maintenance_query")
+            return f"I'm sorry, I had trouble finding maintenance information: {error_msg}"
+
+    def _handle_troubleshooting_query(self, query: str, entities: Dict[str, List[str]], context: Dict[str, Any]) -> str:
+        """Handle troubleshooting queries."""
+        try:
+            # Get relevant troubleshooting information
+            docs = self.retriever.retrieve_documents(query, category="troubleshooting")
+            
+            if not docs:
+                return "I couldn't find specific troubleshooting information for that issue. Could you please provide more details?"
+            
+            # Process the documents to generate response
+            response = self._generate_troubleshooting_response(docs, entities)
+            return response
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "troubleshooting_query")
+            return f"I'm sorry, I had trouble finding troubleshooting information: {error_msg}"
+
+    def _handle_safety_query(self, query: str, entities: Dict[str, List[str]], context: Dict[str, Any]) -> str:
+        """Handle safety-related queries."""
+        try:
+            # Get relevant safety information
+            docs = self.retriever.retrieve_documents(query, category="safety")
+            
+            if not docs:
+                return "I couldn't find specific safety information for that. Please consult your vehicle's manual or a professional for safety concerns."
+            
+            # Process the documents to generate response
+            response = self._generate_safety_response(docs, entities)
+            return response
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "safety_query")
+            return f"I'm sorry, I had trouble finding safety information: {error_msg}"
+
+    def _handle_procedure_query(self, query: str, entities: Dict[str, List[str]], context: Dict[str, Any]) -> str:
+        """Handle procedure-related queries."""
+        try:
+            # Get relevant procedure information
+            docs = self.retriever.retrieve_documents(query, category="procedure")
+            
+            if not docs:
+                return "I couldn't find specific procedure information for that. Could you please rephrase your question?"
+            
+            # Initialize procedure tracking
+            self.current_procedure = self._extract_procedure(docs)
+            self.procedure_step = 1
+            
+            # Return first step
+            return self._get_procedure_step(1)
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "procedure_query")
+            return f"I'm sorry, I had trouble finding procedure information: {error_msg}"
+
+    def _handle_procedure_step(self, query: str, context: Dict[str, Any]) -> str:
+        """Handle multi-step procedure interactions."""
+        try:
+            # Check for procedure navigation commands
+            if "next" in query.lower():
+                self.procedure_step += 1
+            elif "previous" in query.lower():
+                self.procedure_step = max(1, self.procedure_step - 1)
+            elif "repeat" in query.lower():
+                pass  # Keep current step
+            elif "stop" in query.lower():
+                self.current_procedure = None
+                self.procedure_step = 0
+                return "Procedure stopped. How else can I help you?"
+            
+            # Get current step
+            step_response = self._get_procedure_step(self.procedure_step)
+            
+            # Check if we've reached the end
+            if not step_response:
+                self.current_procedure = None
+                self.procedure_step = 0
+                return "You've completed all steps of the procedure. Is there anything else you need help with?"
+            
+            return step_response
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "procedure_step")
+            return f"I'm sorry, I had trouble with the procedure step: {error_msg}"
+
+    def _handle_general_query(self, query: str, context: Dict[str, Any]) -> str:
+        """Handle general queries."""
+        try:
+            # Get relevant general information
+            docs = self.retriever.retrieve_documents(query)
+            
+            if not docs:
+                return "I'm not sure about that. Could you please rephrase your question or ask about something else?"
+            
+            # Process the documents to generate response
+            response = self._generate_general_response(docs)
+            return response
+            
+        except Exception as e:
+            error_msg = self.error_handler.handle_error(e, "general_query")
+            return f"I'm sorry, I had trouble finding information: {error_msg}"
+
+    def _extract_procedure(self, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Extract procedure steps from documents."""
+        procedure = {
+            'title': '',
+            'steps': [],
+            'warnings': [],
+            'tools': [],
+            'parts': []
+        }
         
-        return any(indicator in query for indicator in simple_command_indicators)
+        # Extract procedure information from documents
+        for doc in docs:
+            if 'title' in doc and not procedure['title']:
+                procedure['title'] = doc['title']
+            if 'steps' in doc:
+                procedure['steps'].extend(doc['steps'])
+            if 'warnings' in doc:
+                procedure['warnings'].extend(doc['warnings'])
+            if 'tools' in doc:
+                procedure['tools'].extend(doc['tools'])
+            if 'parts' in doc:
+                procedure['parts'].extend(doc['parts'])
+        
+        return procedure
+
+    def _get_procedure_step(self, step_number: int) -> str:
+        """Get a specific step from the current procedure."""
+        if not self.current_procedure or not self.current_procedure['steps']:
+            return None
+        
+        if step_number < 1 or step_number > len(self.current_procedure['steps']):
+            return None
+        
+        step = self.current_procedure['steps'][step_number - 1]
+        
+        # Format step response
+        response = f"Step {step_number}: {step['description']}"
+        
+        # Add warnings if any
+        if step.get('warnings'):
+            response += "\nWarnings: " + ", ".join(step['warnings'])
+        
+        # Add tools if any
+        if step.get('tools'):
+            response += "\nRequired tools: " + ", ".join(step['tools'])
+        
+        return response
+
+    def _generate_maintenance_response(self, docs: List[Dict[str, Any]], entities: Dict[str, List[str]]) -> str:
+        """Generate response for maintenance queries."""
+        # Implementation depends on your response generation strategy
+        pass
+
+    def _generate_troubleshooting_response(self, docs: List[Dict[str, Any]], entities: Dict[str, List[str]]) -> str:
+        """Generate response for troubleshooting queries."""
+        # Implementation depends on your response generation strategy
+        pass
+
+    def _generate_safety_response(self, docs: List[Dict[str, Any]], entities: Dict[str, List[str]]) -> str:
+        """Generate response for safety queries."""
+        # Implementation depends on your response generation strategy
+        pass
+
+    def _generate_general_response(self, docs: List[Dict[str, Any]]) -> str:
+        """Generate response for general queries."""
+        # Implementation depends on your response generation strategy
+        pass
 
     def continuous_listen(self, wake_word_required: bool = True) -> None:
         """
