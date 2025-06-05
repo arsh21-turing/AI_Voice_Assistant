@@ -9,6 +9,7 @@ langchain-openai==0.0.2
 openai>=1.6.1,<2.0.0
 faiss-cpu==1.7.4
 sentence-transformers==2.2.2
+huggingface_hub==0.16.4
 
 # Text processing
 nltk==3.8.1
