@@ -14,38 +14,41 @@ import json
 import string
 import random
 
-# Import from project modules
-try:
-    from config import get_config
-except ImportError:
-    import sys
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from config import get_config
-
 class VoiceResponseFormatter:
-    """
-    Formatter for optimizing text responses for speech synthesis.
-    """
-
-    def __init__(self, config_manager=None):
-        self.config = config_manager if config_manager else get_config()
-        self.use_ssml = self.config.get('SPEECH_SETTINGS', 'USE_SSML', False)
-        self.auto_pause_before_important = self.config.get('SPEECH_SETTINGS', 'AUTO_PAUSE_BEFORE_IMPORTANT', True)
-        self.pause_strength = self.config.get('SPEECH_SETTINGS', 'PAUSE_STRENGTH', 'medium')
-        self.emphasis_level = self.config.get('SPEECH_SETTINGS', 'EMPHASIS_LEVEL', 'moderate')
-        self.acronym_mode = self.config.get('SPEECH_SETTINGS', 'ACRONYM_MODE', 'spelled_first')
-        self.technical_term_handling = self.config.get('SPEECH_SETTINGS', 'TECHNICAL_TERM_HANDLING', 'careful')
-
+    """Optimizes text responses for natural-sounding speech output."""
+    
+    def __init__(self, formatting_config=None):
+        """Initialize the formatter with speech parameters from configuration.
+        
+        Args:
+            formatting_config: Dictionary of formatting configuration options
+        """
+        self.config = formatting_config or {}
+        
+        # Default configuration values
+        self.use_ssml = self.config.get('use_ssml', False)
+        self.pause_words = self.config.get('pause_words', 
+            ["however", "additionally", "furthermore", "nevertheless"])
+        self.emphasis_keywords = self.config.get('emphasis_keywords', 
+            ["warning", "caution", "important", "note"])
+        self.number_formats = self.config.get('number_formats', {})
+        self.acronym_mappings = self.config.get('acronym_mappings', {})
+        self.technical_terms = self.config.get('technical_terms', {})
+        
+        # Initialize pause durations
         self.pause_durations = {
             'light': {'comma': 250, 'period': 500, 'paragraph': 750, 'bullet': 350, 'important': 400},
             'medium': {'comma': 350, 'period': 650, 'paragraph': 1000, 'bullet': 450, 'important': 500},
             'strong': {'comma': 450, 'period': 800, 'paragraph': 1250, 'bullet': 550, 'important': 600}
         }
-        self.durations = self.pause_durations.get(self.pause_strength, self.pause_durations['medium'])
+        self.durations = self.pause_durations.get('medium')  # Default to medium pause strength
+        
+        # Load any custom terminology
         self.load_terminology()
         logging.info("Initialized voice response formatter")
 
     def load_terminology(self):
+        """Load terminology mappings for acronyms and technical terms."""
         self.terminology = {
             'ABS': 'A B S', 'TPMS': 'T P M S', 'ECU': 'E C U', 'OBD': 'O B D',
             'OBD-II': 'O B D two', 'RPM': 'R P M', 'MPG': 'miles per gallon',
@@ -54,19 +57,13 @@ class VoiceResponseFormatter:
             '10W-40': 'ten W forty', 'psi': 'pounds per square inch',
             'lbs': 'pounds', '0W-20': 'zero W twenty', 'liter': 'leeter',
         }
-        try:
-            terminology_path = self.config.get('SPEECH_SETTINGS', 'TERMINOLOGY_PATH', './data/speech/automotive_pronunciations.json')
-            if Path(terminology_path).exists():
-                with open(terminology_path, 'r') as f:
-                    custom_terminology = json.load(f)
-                    self.terminology.update(custom_terminology)
-                logging.info(f"Loaded custom terminology from {terminology_path}")
-        except Exception as e:
-            logging.warning(f"Could not load custom terminology: {str(e)}")
+        
+        # Update with any custom mappings from config
+        self.terminology.update(self.acronym_mappings)
+        self.terminology.update(self.technical_terms)
 
     def format_response(self, text: str) -> str:
-        """
-        Format a response for optimal speech synthesis.
+        """Format a response for optimal speech synthesis.
 
         Args:
             text: Raw text response from the LLM
@@ -90,40 +87,63 @@ class VoiceResponseFormatter:
         return text
 
     def format_numbers(self, text):
+        """Format numbers for natural speech."""
+        # Apply custom number formats from config
+        for pattern, replacement in self.number_formats.items():
+            text = re.sub(pattern, replacement, text)
+            
+        # Apply default number formatting
         text = re.sub(r'(\d+)\.(\d+)', r'\1 point \2', text)
         text = re.sub(r'(\d+)-(\d+)(?!\w)', r'\1 to \2', text)
         return text
 
     def format_units(self, text):
+        """Format units for natural speech."""
         units = {'psi': 'pounds per square inch', 'mph': 'miles per hour', 'rpm': 'R P M'}
         for k, v in units.items():
             text = re.sub(rf'(\d+)\s*{k}\b', rf'\1 {v}', text)
         return text
 
     def format_acronyms(self, text):
+        """Format acronyms for natural speech."""
         for k, v in self.terminology.items():
             if re.match(r'^[A-Z\-/]+$', k):
                 text = re.sub(rf'\b{k}\b', v, text)
         return text
 
     def format_technical_terms(self, text):
+        """Format technical terms for natural speech."""
         for k, v in self.terminology.items():
             if not re.match(r'^[A-Z\-/]+$', k):
                 text = re.sub(rf'\b{k}\b', v, text, flags=re.IGNORECASE)
         return text
 
     def format_section_references(self, text):
+        """Format section references for natural speech."""
         text = re.sub(r'Section (\d+)\.(\d+)', r'Section \1 point \2', text)
         return text
 
     def add_pauses(self, text):
+        """Add natural pauses to the text."""
         if not self.use_ssml:
             return text
+            
+        # Add pauses after punctuation
         text = re.sub(r'(?<=\.)\s+', f'<break time="{self.durations["period"]}ms"/> ', text)
         text = re.sub(r'(?<=,)\s+', f'<break time="{self.durations["comma"]}ms"/> ', text)
+        
+        # Add pauses before important words
+        for word in self.pause_words:
+            text = re.sub(rf'\b{word}\b', f'<break time="{self.durations["important"]}ms"/> {word}', text)
+            
+        # Add emphasis to important keywords
+        for word in self.emphasis_keywords:
+            text = re.sub(rf'\b{word}\b', f'<emphasis level="strong">{word}</emphasis>', text)
+            
         return text
 
     def wrap_ssml(self, text):
+        """Wrap the text in SSML tags."""
         return f'<speak>{text}</speak>'
 
 if __name__ == "__main__":
