@@ -43,6 +43,10 @@ class ErrorType(Enum):
     CONFIGURATION = "configuration"
     DATA = "data"
     SYSTEM = "system"
+    PDF_PROCESSING = "pdf_processing"
+    AUDIO_DEVICE = "audio_device"
+    EMBEDDING = "embedding"
+    INDEX = "index"
 
 class ErrorHandler:
     """
@@ -133,6 +137,26 @@ class ErrorHandler:
                 'ERROR_HANDLING', 
                 'RECOGNITION_ERROR_MESSAGE', 
                 "Sorry, I didn't catch what you said."
+            ),
+            ErrorType.PDF_PROCESSING.value: self.config.get(
+                'ERROR_HANDLING',
+                'PDF_PROCESSING_ERROR_MESSAGE',
+                "I'm having trouble processing the PDF document."
+            ),
+            ErrorType.AUDIO_DEVICE.value: self.config.get(
+                'ERROR_HANDLING',
+                'AUDIO_DEVICE_ERROR_MESSAGE',
+                "I'm having trouble with the audio device."
+            ),
+            ErrorType.EMBEDDING.value: self.config.get(
+                'ERROR_HANDLING',
+                'EMBEDDING_ERROR_MESSAGE',
+                "I'm having trouble processing the document content."
+            ),
+            ErrorType.INDEX.value: self.config.get(
+                'ERROR_HANDLING',
+                'INDEX_ERROR_MESSAGE',
+                "I'm having trouble accessing the document index."
             )
         }
         

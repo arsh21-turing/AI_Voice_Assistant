@@ -1,56 +1,50 @@
 {
-    "API_SETTINGS": {
-        "GROQ_API_KEY": "<KEY-HERE>",
-        "GROQ_MODEL": "llama3-8b-8192",
-        "GROQ_API_BASE": "https://api.groq.com/openai/v1",
-        "MAX_TOKENS": 1024,
-        "TEMPERATURE": 0.7
-    },
-    "SPEECH_SETTINGS": {
-        "RECOGNITION_ENGINE": "google",
-        "SYNTHESIS_ENGINE": "pyttsx3",
-        "LANGUAGE": "en-US",
-        "WAKE_WORD": "assistant",
-        "VOICE_RATE": 150,
-        "VOICE_VOLUME": 1.0,
-        "ENERGY_THRESHOLD": 300,
-        "PAUSE_THRESHOLD": 0.5,
-        "DYNAMIC_ENERGY_THRESHOLD": true
-    },
-    "RAG_SETTINGS": {
-        "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
-        "INDEX_PATH": "./data/index/manual_index",
-        "TOP_K": 5,
-        "CHUNK_SIZE": 1000,
-        "CHUNK_OVERLAP": 200
-    },
-    "LOGGING_SETTINGS": {
-        "LOG_LEVEL": "INFO",
-        "LOG_FORMAT": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        "LOG_FILE": "car_assistant.log",
-        "LOG_MAX_BYTES": 10485760,
-        "LOG_BACKUP_COUNT": 5
-    },
-    "ERROR_HANDLING": {
-        "MAX_RETRY_ATTEMPTS": 3,
-        "RETRY_DELAY": 1.0,
-        "DEFAULT_ERROR_MESSAGE": "Sorry, I encountered an error while processing your request.",
-        "NETWORK_ERROR_MESSAGE": "Sorry, I'm having trouble connecting to the network.",
-        "API_ERROR_MESSAGE": "Sorry, I'm having trouble accessing the necessary services.",
-        "RECOGNITION_ERROR_MESSAGE": "Sorry, I didn't catch what you said."
-    },
-    "CONTEXT_SETTINGS": {
-        "MAX_CONVERSATION_TURNS": 5,
-        "CONTEXT_WINDOW_SIZE": 10,
-        "INCLUDE_TIMESTAMPS": true,
-        "STORE_RAW_AUDIO": false,
-        "ABBREVIATE_LONG_RESPONSES": true
-    },
-    "APP_SETTINGS": {
-        "DEBUG_MODE": false,
-        "TIMEOUT": 30,
-        "CONTINUOUS_LISTENING": true,
-        "RESPONSE_MAX_LENGTH": 250,
-        "DATA_DIR": "./data"
-    }
-} 
+  "voice": {
+    "rate": 150,
+    "volume": 1.0,
+    "voice_id": null
+  },
+  "recognition": {
+    "timeout": 10,
+    "phrase_time_limit": 5
+  },
+  "formatting": {
+    "use_ssml": false,
+    "pause_words": [
+      "however",
+      "additionally",
+      "furthermore",
+      "nevertheless"
+    ],
+    "emphasis_keywords": [
+      "warning",
+      "caution",
+      "important",
+      "note"
+    ]
+  },
+  "rag": {
+    "model_name": "all-MiniLM-L6-v2",
+    "index_path": "data/index/manual_index",
+    "top_k": 3,
+    "relevance_threshold": 0.6,
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+  },
+  "embedding_cache": {
+    "size_limit": 10000,
+    "enable_analytics": true
+  },
+  "API_SETTINGS": {
+    "GROQ_API_KEY": "",
+    "GROQ_MODEL": "llama3-8b-8192",
+    "GROQ_API_BASE": "https://api.groq.com/openai/v1"
+  },
+  "logging": {
+    "log_dir": "logs",
+    "log_level": "INFO",
+    "enable_console": true,
+    "max_log_files": 10,
+    "max_file_size_mb": 10
+  }
+}
