@@ -46,12 +46,13 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import pdfplumber
 
-from utils.error_handler import ErrorHandler
+from utils.error_handler import ErrorHandler, ErrorType
 from utils.embedding_cache import EmbeddingCache
 from utils.logger import VoiceAssistantLogger
 from utils.config_manager import ConfigManager
 from utils.command_handler import CommandHandler
 from utils.helpers import PDFProcessor
+from utils.system_monitor import SystemMonitor, SystemComponent, SystemStatus
 
 from speech.formatting import VoiceResponseFormatter
 
@@ -280,7 +281,13 @@ class VoiceAssistant:
             with self.microphone as source:
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
         
+        # Initialize system monitor (after all other components)
+        self.system_monitor = SystemMonitor(self)
+        
         self.logger.log_system("initialization_complete", "VoiceAssistant initialization completed successfully")
+        
+        # Flag to track if we're in fallback text mode (for audio output issues)
+        self.text_only_mode = False
     
     def _initialize_logger(self):
         """Initialize the logging system."""
@@ -303,29 +310,81 @@ class VoiceAssistant:
 
     def _initialize_speech_components(self):
         """Initialize speech recognition and synthesis components."""
-        # Initialize speech recognition
-        self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
-        
-        # Initialize speech synthesis
-        self.engine = pyttsx3.init()
-        
-        # Configure speech properties from loaded config
-        voice_config = self.config.get("voice", {})
-        self.engine.setProperty('rate', voice_config.get('rate', 150))
-        self.engine.setProperty('volume', voice_config.get('volume', 1.0))
-        
-        # Set voice based on configuration
-        voices = self.engine.getProperty('voices')
-        voice_id = voice_config.get('voice_id')
-        if voice_id and voices:
-            for voice in voices:
-                if voice.id == voice_id:
-                    self.engine.setProperty('voice', voice.id)
-                    break
-        
-        # Response formatter for natural-sounding speech
-        self.formatter = VoiceResponseFormatter(self.config.get("formatting", {}))
+        try:
+            # Initialize speech recognition with adjusted settings
+            self.recognizer = sr.Recognizer()
+            self.recognizer.energy_threshold = 300  # Lower energy threshold
+            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.pause_threshold = 0.8  # Shorter pause threshold
+            
+            # List available microphones
+            print("\nAvailable microphones:")
+            mic_list = sr.Microphone.list_microphone_names()
+            for index, name in enumerate(mic_list):
+                print(f"Microphone {index}: {name}")
+            
+            # Try to initialize microphone with error handling
+            try:
+                # Try to initialize with specific device index
+                for device_index in range(len(mic_list)):
+                    try:
+                        print(f"\nTrying microphone {device_index}...")
+                        self.microphone = sr.Microphone(device_index=device_index)
+                        
+                        # Test microphone with proper cleanup
+                        print("Testing microphone...")
+                        with self.microphone as source:
+                            self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                        print(f"Successfully initialized microphone {device_index}")
+                        break
+                    except Exception as e:
+                        print(f"Failed to initialize microphone {device_index}: {str(e)}")
+                        continue
+                else:
+                    raise Exception("No working microphone found")
+                
+            except Exception as e:
+                print(f"\nError initializing microphones: {str(e)}")
+                print("Trying default microphone initialization...")
+                try:
+                    self.microphone = sr.Microphone()
+                    print("\nSelected default microphone")
+                    
+                    # Test microphone with proper cleanup
+                    print("Testing microphone...")
+                    with self.microphone as source:
+                        self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                    print("Microphone test successful!")
+                    
+                except Exception as e2:
+                    print(f"\nError with default microphone: {str(e2)}")
+                    raise Exception("Failed to initialize any microphone")
+            
+            # Initialize speech synthesis
+            self.engine = pyttsx3.init()
+            
+            # Configure speech properties from loaded config
+            voice_config = self.config.get("voice", {})
+            self.engine.setProperty('rate', voice_config.get('rate', 150))
+            self.engine.setProperty('volume', voice_config.get('volume', 1.0))
+            
+            # Set voice based on configuration
+            voices = self.engine.getProperty('voices')
+            voice_id = voice_config.get('voice_id')
+            if voice_id and voices:
+                for voice in voices:
+                    if voice.id == voice_id:
+                        self.engine.setProperty('voice', voice.id)
+                        break
+            
+            # Response formatter for natural-sounding speech
+            self.formatter = VoiceResponseFormatter(self.config.get("formatting", {}))
+            
+        except Exception as e:
+            print(f"\nError initializing speech components: {str(e)}")
+            if self.error_handler:
+                self.error_handler.log_error(e, "speech_init", {"context": "initialization"})
+            raise
     
     def _initialize_embedding_cache(self):
         """Initialize the embedding cache for RAG."""
@@ -1130,63 +1189,137 @@ Answer:"""
             })
             return "I apologize, but I encountered an error while generating a response. Please try again."
     
-    def listen(self) -> Optional[str]:
-        """Listen for user input and return transcribed text."""
+    def wait_for_wake_word(self) -> bool:
+        """Listen for the wake word to activate the assistant.
+        
+        Returns:
+            True if wake word detected, False otherwise
+        """
         try:
-            print("\nListening...")
+            with self.microphone as source:
+                print(f"Waiting for wake word: '{self.wake_word}'...")
+                # Adjust for ambient noise before listening
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                
+                # Set timeout and phrase time limit
+                timeout = 5  # Reduced timeout to 5 seconds for more responsive wake word detection
+                phrase_time_limit = 3
+                
+                try:
+                    audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
+                    text = self.recognizer.recognize_google(audio).lower()
+                    print(f"Heard: {text}")
+                    
+                    if self.wake_word in text:
+                        # Provide feedback that wake word was detected
+                        print("\n[Wake word detected!]")
+                        self.speak("I'm listening.")
+                        return True
+                    return False
+                    
+                except sr.WaitTimeoutError:
+                    print("No speech detected within timeout period")
+                    return False
+                except sr.UnknownValueError:
+                    print("Could not understand audio")
+                    return False
+                except sr.RequestError as e:
+                    should_retry, message = self.system_monitor.handle_error(
+                        e,
+                        "wake_word_recognition",
+                        SystemComponent.MICROPHONE,
+                        {"context": "speech_recognition"}
+                    )
+                    print(message)
+                    return False
+                
+        except Exception as e:
+            should_retry, message = self.system_monitor.handle_error(
+                e, 
+                "wake_word_detection",
+                SystemComponent.MICROPHONE
+            )
+            print(message)
+            return False
+
+    def listen(self) -> Optional[str]:
+        """Listen for user input and return transcribed text.
+        
+        The function will keep listening for up to 30 seconds after
+        the wake word has been detected, allowing users to complete
+        their full question without being cut off mid-sentence.
+        
+        Returns:
+            Transcribed text or None if nothing was heard
+        """
+        # Check system status before attempting to listen
+        mic_status = self.system_monitor.component_status[SystemComponent.MICROPHONE]
+        if mic_status["status"] == SystemStatus.ERROR:
+            print(f"Microphone status is {mic_status['status'].value}: {mic_status['message']}")
+            self.speak(f"I'm having trouble with the microphone. {mic_status['message']}")
+            return None
+            
+        try:
+            print("\nListening for your full question (active for 30 seconds)...")
             with self.microphone as source:
                 # Adjust for ambient noise
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 
-                # Listen for audio
+                # Set a longer phrase time limit to capture complete sentences
+                # and a longer timeout to give the user time to speak
+                phrase_time_limit = 10  # Increased to capture longer sentences
+                timeout = 30  # Extended to 30 seconds as requested
+                
+                # Visual indicator that system is listening
+                print("🎤 Listening... (speak your complete question)")
+                
+                # Listen for audio with extended parameters
                 audio = self.recognizer.listen(
                     source,
-                    timeout=5,
-                    phrase_time_limit=5
+                    timeout=timeout,
+                    phrase_time_limit=phrase_time_limit
                 )
                 
             print("Processing speech...")
             text = self.recognizer.recognize_google(audio)
             print(f"\nI heard: {text}")
+            
+            # Update microphone status to OK if we successfully got a transcription
+            self.system_monitor._update_component_status(
+                SystemComponent.MICROPHONE,
+                SystemStatus.OK,
+                "Microphone functioning normally",
+                {}
+            )
+            
             return text.lower()
             
         except sr.WaitTimeoutError:
-            print("No speech detected within timeout period")
+            print("No speech detected within the 30-second window")
+            self.speak("I didn't hear anything. Please try again.")
             return None
         except sr.UnknownValueError:
             print("Could not understand audio")
+            self.speak("I couldn't understand that. Could you please repeat?")
             return None
         except sr.RequestError as e:
-            error_type = "network"
-            if "timeout" in str(e).lower():
-                error_type = "timeout"
-            
-            message, should_retry = self.error_handler.handle_error(
+            should_retry, message = self.system_monitor.handle_error(
                 e,
-                error_type,
-                {
-                    "context": "speech_recognition",
-                    "retryable": error_type in ["timeout", "network"]
-                }
+                "speech_recognition",
+                SystemComponent.MICROPHONE,
+                {"context": "google_api"}
             )
             print(message)
+            self.speak(message)
             return None
         except Exception as e:
-            error_type = "audio_device"
-            if "timeout" in str(e).lower():
-                error_type = "timeout"
-            elif "network" in str(e).lower():
-                error_type = "network"
-            
-            message, should_retry = self.error_handler.handle_error(
+            should_retry, message = self.system_monitor.handle_error(
                 e,
-                error_type,
-                {
-                    "context": "audio_listening",
-                    "retryable": error_type in ["timeout", "network"]
-                }
+                "audio_listening",
+                SystemComponent.MICROPHONE
             )
             print(message)
+            self.speak(message)
             return None
 
     def speak(self, text: str) -> None:
@@ -1195,23 +1328,47 @@ Answer:"""
         Args:
             text: The text to speak
         """
-        try:
-            # Store the response for repeat command
-            self.last_response = text
-            self.command_handler.set_last_response(text)
+        # Always store the response for repeat command, regardless of output method
+        self.last_response = text
+        self.command_handler.set_last_response(text)
+        
+        # Check audio status and use text-only mode if necessary
+        audio_status = self.system_monitor.component_status[SystemComponent.AUDIO_OUTPUT]
+        if audio_status["status"] == SystemStatus.ERROR or self.text_only_mode:
+            # Use text-only mode
+            if not self.text_only_mode:
+                print("\n[Switching to text-only mode due to audio issues]")
+                self.text_only_mode = True
             
+            # Print the response in a formatted way
+            print(f"\n{'='*50}\nASSISTANT: {text}\n{'='*50}\n")
+            return
+        
+        try:
             # Speak the text
             self.engine.say(text)
             self.engine.runAndWait()
             
-        except Exception as e:
-            self.error_handler.handle_error(
-                ErrorType.SPEECH,
-                str(e),
-                "Failed to speak the response",
-                {"text": text}
+            # Update audio status to OK if we successfully spoke
+            self.system_monitor._update_component_status(
+                SystemComponent.AUDIO_OUTPUT,
+                SystemStatus.OK,
+                "Audio output functioning normally",
+                {}
             )
-    
+            
+        except Exception as e:
+            should_retry, message = self.system_monitor.handle_error(
+                e,
+                "text_to_speech",
+                SystemComponent.AUDIO_OUTPUT
+            )
+            print(message)
+            
+            # Switch to text-only mode
+            self.text_only_mode = True
+            print(f"\n{'='*50}\nASSISTANT: {text}\n{'='*50}\n")
+
     def process_command(self, text: str) -> Tuple[bool, Optional[str]]:
         """Process a voice command.
         
@@ -1222,7 +1379,26 @@ Answer:"""
             Tuple of (is_command, response)
         """
         try:
-            # Try to process as a command
+            # Check for system status command first
+            if "system status" in text.lower() or "how are you doing" in text.lower():
+                if hasattr(self, 'system_monitor'):
+                    overall = self.system_monitor.component_status[SystemComponent.OVERALL]
+                    if overall["status"] == SystemStatus.OK:
+                        return True, "All systems are functioning normally."
+                    else:
+                        # Generate a detailed status message
+                        issues = []
+                        for component, info in self.system_monitor.component_status.items():
+                            if component != SystemComponent.OVERALL and info["status"] != SystemStatus.OK:
+                                issues.append(f"{component.value}: {info['message']}")
+                        
+                        if issues:
+                            issues_text = ". ".join(issues)
+                            return True, f"I'm experiencing some issues: {issues_text}"
+                        else:
+                            return True, f"I'm experiencing some issues: {overall['message']}"
+            
+            # Try to process as a command using command handler
             is_command, response, updated_settings = self.command_handler.process_command(
                 text,
                 self.voice_settings
@@ -1248,13 +1424,23 @@ Answer:"""
             return False, None
             
         except Exception as e:
-            self.error_handler.handle_error(
-                ErrorType.GENERAL,
-                str(e),
-                "Error processing voice command",
-                {"command": text}
-            )
-            return False, None
+            if hasattr(self, 'system_monitor'):
+                should_retry, message = self.system_monitor.handle_error(
+                    e,
+                    "command_processing",
+                    SystemComponent.OVERALL
+                )
+                print(f"Error processing command: {message}")
+                return True, f"I had trouble processing that command. {message}"
+            else:
+                # Fallback to old error handler
+                self.error_handler.handle_error(
+                    ErrorType.GENERAL,
+                    str(e),
+                    "Error processing voice command",
+                    {"command": text}
+                )
+                return False, None
     
     def _handle_voice_selection(self, voice_type: str) -> None:
         """Handle voice selection request.
@@ -1305,67 +1491,6 @@ Answer:"""
                 {"voice_type": voice_type}
             )
     
-    def wait_for_wake_word(self) -> bool:
-        """Listen for the wake word to activate the assistant.
-        
-        Returns:
-            True if wake word detected, False otherwise
-        """
-        try:
-            with self.microphone as source:
-                print(f"Waiting for wake word: '{self.wake_word}'...")
-                # Adjust for ambient noise before listening
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                
-                # Set timeout and phrase time limit
-                timeout = 5  # Reduced timeout to 5 seconds
-                phrase_time_limit = 3
-                
-                try:
-                    audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
-                    text = self.recognizer.recognize_google(audio).lower()
-                    print(f"Heard: {text}")
-                    return self.wake_word in text
-                except sr.WaitTimeoutError:
-                    print("No speech detected within timeout period")
-                    return False
-                except sr.UnknownValueError:
-                    print("Could not understand audio")
-                    return False
-                except sr.RequestError as e:
-                    error_type = "network"
-                    if "timeout" in str(e).lower():
-                        error_type = "timeout"
-                    
-                    message, should_retry = self.error_handler.handle_error(
-                        e,
-                        error_type,
-                        {
-                            "context": "wake_word_recognition",
-                            "retryable": error_type in ["timeout", "network"]
-                        }
-                    )
-                    print(message)
-                    return False
-                
-        except Exception as e:
-            error_type = "audio_device"
-            if "timeout" in str(e).lower():
-                error_type = "timeout"
-            elif "network" in str(e).lower():
-                error_type = "network"
-            
-            message, should_retry = self.error_handler.handle_error(
-                e,
-                error_type,
-                {
-                    "context": "wake_word_detection",
-                    "retryable": error_type in ["timeout", "network"]
-                }
-            )
-            print(message)
-            return False
-    
     def adjust_for_ambient_noise(self, duration=1) -> None:
         """Adjust the recognizer for ambient noise to improve recognition.
         
@@ -1396,6 +1521,9 @@ Answer:"""
         Returns:
             Generated response to the query
         """
+        # Check for any system notifications before processing
+        self._check_and_speak_notifications()
+        
         try:
             print(f"\n{'='*50}")
             print(f"Processing query: {query}")
@@ -1403,16 +1531,50 @@ Answer:"""
             
             # Step 1: Try to retrieve relevant context from RAG
             print("\nSearching for relevant context...")
-            context_chunks = self.retrieve_context(query)
-            print(f"Found {len(context_chunks)} relevant context chunks")
+            
+            # Check RAG system status
+            rag_status = self.system_monitor.component_status[SystemComponent.RAG]["status"]
+            if rag_status == SystemStatus.ERROR:
+                print("RAG system unavailable, skipping context retrieval")
+                context_chunks = []
+            else:
+                try:
+                    context_chunks = self.retrieve_context(query)
+                    print(f"Found {len(context_chunks)} relevant context chunks")
+                    
+                    # Update RAG status to OK if successful
+                    if rag_status != SystemStatus.OK:
+                        self.system_monitor._update_component_status(
+                            SystemComponent.RAG,
+                            SystemStatus.OK,
+                            "RAG system operating normally",
+                            {"chunks_retrieved": len(context_chunks)}
+                        )
+                except Exception as e:
+                    should_retry, message = self.system_monitor.handle_error(
+                        e,
+                        "context_retrieval",
+                        SystemComponent.RAG
+                    )
+                    print(f"Error retrieving context: {message}")
+                    context_chunks = []
             
             # Step 2: Generate response using Groq
-            if self.client:
-                print("\nGenerating response using Groq...")
-                # Prepare the prompt with context if available
+            # Check API status
+            api_status = self.system_monitor.component_status[SystemComponent.API]["status"]
+            if api_status == SystemStatus.ERROR or not self.client:
+                print("API service unavailable, using fallback response")
+                # Create a fallback response
                 if context_chunks:
-                    context_text = "\n".join([f"Context {i+1}: {item['text']}" for i, item in enumerate(context_chunks)])
-                    prompt = f"""Based on the following context, answer the question. If the context doesn't contain relevant information, say so.
+                    return f"I found some relevant information that might help, but I'm currently experiencing connectivity issues with my language service. Please try again later."
+                else:
+                    return "I'm sorry, I'm having trouble connecting to my language service right now. Your question was received, but I cannot provide a detailed answer at the moment. Please try again later."
+            
+            print("\nGenerating response using Groq...")
+            # Prepare the prompt with context if available
+            if context_chunks:
+                context_text = "\n".join([f"Context {i+1}: {item['text']}" for i, item in enumerate(context_chunks)])
+                prompt = f"""Based on the following context, answer the question. If the context doesn't contain relevant information, say so.
 
 Context:
 {context_text}
@@ -1420,14 +1582,15 @@ Context:
 Question: {query}
 
 Answer:"""
-                else:
-                    prompt = f"""Answer the following question about vehicles. If you're not sure about something, say so.
+            else:
+                prompt = f"""Answer the following question about vehicles. If you're not sure about something, say so.
 
 Question: {query}
 
 Answer:"""
 
-                print("\nSending request to Groq...")
+            print("\nSending request to Groq...")
+            try:
                 # Generate response using Groq
                 response = self.client.chat.completions.create(
                     model=self.groq_model,
@@ -1435,171 +1598,98 @@ Answer:"""
                     temperature=0.7,
                     max_tokens=500
                 )
+                
+                # Update API status to OK
+                if api_status != SystemStatus.OK:
+                    self.system_monitor._update_component_status(
+                        SystemComponent.API,
+                        SystemStatus.OK,
+                        "API service operating normally",
+                        {"api": "Groq"}
+                    )
+                
                 print("\nReceived response from Groq:")
                 print(f"\n{'='*50}")
                 print(response.choices[0].message.content.strip())
                 print(f"{'='*50}\n")
                 return response.choices[0].message.content.strip()
-            else:
-                print("\nGroq client not initialized, using fallback response")
-                # Fallback response if Groq is not available
+                
+            except Exception as e:
+                should_retry, message = self.system_monitor.handle_error(
+                    e,
+                    "language_model_request",
+                    SystemComponent.API
+                )
+                print(f"API error: {message}")
+                
+                # Provide a graceful fallback response
                 if context_chunks:
-                    return f"I found some relevant information, but I'm unable to generate a proper response at the moment. Please try again later."
+                    return f"I found relevant information about your question, but I'm having trouble with my language service. {message} Here's what I found: " + context_chunks[0]["text"][:200] + "..."
                 else:
-                    return "I'm sorry, I'm unable to process your request at the moment. Please try again later."
+                    return f"I'm having trouble generating a response at the moment. {message}"
                 
         except Exception as e:
-            error_type = "api"
-            if "timeout" in str(e).lower():
-                error_type = "timeout"
-            elif "network" in str(e).lower():
-                error_type = "network"
-            elif "rate limit" in str(e).lower():
-                error_type = "rate_limit"
-            elif "context" in str(e).lower():
-                error_type = "context"
-            elif "retrieval" in str(e).lower():
-                error_type = "retrieval"
-            
-            message, should_retry = self.error_handler.handle_error(
+            should_retry, message = self.system_monitor.handle_error(
                 e,
-                error_type,
-                {
-                    "query": query,
-                    "has_context": context_chunks is not None and len(context_chunks) > 0,
-                    "retryable": error_type in ["timeout", "network", "rate_limit"]
-                }
+                "query_processing",
+                SystemComponent.OVERALL
             )
             print(f"\nError: {message}")
-            return "I encountered an error while processing your request. Please try again."
-    
-    def handle_voice_command(self, command_text: str) -> bool:
-        """Handle a voice command to control the assistant's behavior.
-        
-        Args:
-            command_text: The command from the user
-            
-        Returns:
-            True if command was handled, False if not recognized as a command
-        """
-        try:
-            # Get current voice settings
-            current_settings = {
-                "rate": self.engine.getProperty('rate'),
-                "volume": self.engine.getProperty('volume'),
-                "voice_id": self.engine.getProperty('voice').id if hasattr(self.engine.getProperty('voice'), 'id') else None
-            }
-            
-            # Process the command
-            is_command, response, new_settings = self.command_handler.process_command(
-                command_text, current_settings
-            )
-            
-            if not is_command:
-                return False
-                
-            # Handle special voice selection request
-            if "requested_voice" in new_settings:
-                voice_type = new_settings.pop("requested_voice")
-                # Change to requested voice type
-                voices = self.engine.getProperty('voices')
-                if voices:
-                    # Find appropriate voice
-                    target_voices = [v for v in voices if (
-                        (voice_type == "male" and not "female" in v.name.lower()) or
-                        (voice_type == "female" and "female" in v.name.lower()) or
-                        (voice_type == "different" and v.id != current_settings["voice_id"])
-                    )]
-                    
-                    if target_voices:
-                        # Set the first matching voice
-                        self.engine.setProperty('voice', target_voices[0].id)
-                        self.config["voice"]["voice_id"] = target_voices[0].id
-                        # Save the updated configuration
-                        if hasattr(self, 'config_manager'):
-                            self.config_manager.update_section("voice", self.config["voice"])
-            
-            # Apply new settings
-            for setting, value in new_settings.items():
-                if hasattr(self.engine, 'setProperty'):
-                    self.engine.setProperty(setting, value)
-                    # Update config to persist settings
-                    self.config["voice"][setting] = value
-            
-            # If settings were changed, save the updated configuration
-            if hasattr(self, 'config_manager'):
-                self.config_manager.update_section("voice", self.config["voice"])
-                
-            # Log the command if we have a logger
-            if hasattr(self, 'logger'):
-                self.logger.log_system("voice_command", "Command processed", {
-                    "command": command_text,
-                    "new_settings": new_settings
-                })
-            
-            # Speak the response
-            self.speak(response)
-            
-            return True
-            
-        except Exception as e:
-            # Handle any errors
-            if self.error_handler:
-                self.error_handler.log_error(e, "voice_command", {"command": command_text})
-            print(f"Error handling voice command: {str(e)}")
-            return False
+            return f"I encountered an error while processing your request. {message}"
 
     def run(self):
         """Run the voice assistant main loop."""
         print("Voice Assistant is running. Say 'hey assistant' to begin.")
         
-        while True:
-            try:
-                # Listen for wake word
-                if not self.wait_for_wake_word():
-                    continue
-                
-                # Listen for command or query
-                text = self.listen()
-                if not text:
-                    continue
-                
-                # Try to process as a command first
-                is_command, response = self.process_command(text)
-                if is_command:
-                    self.speak(response)
-                    continue
-                
-                # Process as a normal query
-                response = self.process_query(text)
-                if response:
-                    self.speak(response)
-                
-            except KeyboardInterrupt:
-                print("\nGoodbye!")
-                break
-                
-            except Exception as e:
-                self.error_handler.handle_error(
-                    ErrorType.GENERAL,
-                    str(e),
-                    "Error in main loop",
-                    {"error": str(e)}
-                )
-                continue
-
-    def list_voice_commands(self) -> str:
-        """Return a list of available voice commands as a string."""
-        commands = [
-            "speak slower/faster",
-            "volume up/down",
-            "repeat that/say again",
-            "use male/female voice",
-            "reset voice settings",
-            "what commands can I say"
-        ]
+        # Initial system check
+        self.system_monitor.check_all_systems()
         
-        return "Available voice commands: " + ", ".join(commands)
+        # Display initial system status
+        status = self.system_monitor.component_status[SystemComponent.OVERALL]
+        if status["status"] != SystemStatus.OK:
+            print(f"\nSystem status: {status['status'].value} - {status['message']}")
+            
+            # Speak status message if there are issues
+            if status["status"] == SystemStatus.ERROR:
+                self.speak(f"Warning: {status['message']}. Some features may be unavailable.")
+            elif status["status"] == SystemStatus.WARNING:
+                self.speak(f"Note: {status['message']}. I'll do my best to assist you.")
+        
+        # Start voice assistant mode
+        print("\n=== Starting Voice Assistant Mode ===")
+        print("Say 'hey assistant' to begin asking questions about the PDF content.")
+        print("Press Ctrl+C to exit.")
+
+        try:
+            while True:
+                # Wait for wake word
+                if self.wait_for_wake_word():
+                    # Listen for command
+                    text = self.listen()
+                    if text:
+                        # Process command first
+                        is_command, response = self.process_command(text)
+                        if is_command:
+                            self.speak(response)
+                        else:
+                            # If not a command, process as a query
+                            response = self.process_query(text)
+                            self.speak(response)
+        except KeyboardInterrupt:
+            print("\nShutting down voice assistant...")
+            self.speak("Goodbye!")
+        except Exception as e:
+            print(f"\nError in main loop: {str(e)}")
+            if self.error_handler:
+                self.error_handler.handle_error(e, "main_loop", {"context": "voice_assistant"})
+
+    def _check_and_speak_notifications(self):
+        """Check for system notifications and speak them to the user."""
+        if hasattr(self, 'system_monitor') and self.system_monitor.has_notifications():
+            notification = self.system_monitor.get_notification()
+            if notification:
+                print(f"\nSystem notification: {notification['message']}")
+                self.speak(notification['message'])
 
     def _load_default_profile(self):
         """Load the default profile if it exists."""
@@ -1691,19 +1781,13 @@ if __name__ == "__main__":
                     cache_stats = assistant.embedding_cache.get_cache_stats()
                     print(f"Embedding cache stats: {cache_stats}\n")
                 
-                # Interactive mode
-                print("\n=== Interactive mode ===")
-                print("Type 'exit' to quit or ask a question about the PDF content:")
-                
-                while True:
-                    user_input = input("\nYour question: ")
-                    if user_input.lower() in ('exit', 'quit', 'q'):
-                        break
-                        
-                    response = assistant.process_query(user_input)
-                    print(f"\nResponse: {response}")
-                
-                startup_logger.info("Application ended normally")
+                # Start voice assistant mode
+                print("\n=== Starting Voice Assistant Mode ===")
+                print("Say 'hey assistant' to begin asking questions about the PDF content.")
+                print("Press Ctrl+C to exit.")
+
+                # Run the voice assistant
+                assistant.run()
                 
             else:
                 startup_logger.error(f"Failed to process {pdf_filename}")

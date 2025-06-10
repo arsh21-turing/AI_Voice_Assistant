@@ -2,11 +2,156 @@
   "voice": {
     "rate": 150,
     "volume": 1.0,
-    "voice_id": null
+    "voice_id": null,
+    "default_profile": "standard",
+    "profiles": {
+      "standard": {
+        "rate": 150,
+        "volume": 1.0,
+        "voice_id": null,
+        "description": "Standard voice profile with balanced speaking rate"
+      },
+      "clear": {
+        "rate": 120,
+        "volume": 1.0,
+        "emphasis_level": "high",
+        "description": "Slower, clearer voice for better comprehension"
+      },
+      "swift": {
+        "rate": 180,
+        "volume": 0.9,
+        "description": "Faster speech for experienced users"
+      },
+      "presentation": {
+        "rate": 130,
+        "volume": 1.0,
+        "pitch": 1.1,
+        "emphasis_level": "high",
+        "pause_multiplier": 1.5,
+        "description": "Presentation-style voice with emphasis and longer pauses"
+      }
+    },
+    "language_settings": {
+      "primary_language": "en-US",
+      "supported_languages": [
+        "en-US",
+        "en-GB",
+        "es-ES",
+        "fr-FR",
+        "de-DE"
+      ],
+      "language_voices": {
+        "en-US": null,
+        "en-GB": null,
+        "es-ES": null,
+        "fr-FR": null,
+        "de-DE": null
+      },
+      "auto_detect_language": false
+    },
+    "advanced": {
+      "pitch": 1.0,
+      "emphasis_level": "medium",
+      "pitch_range": 1.0,
+      "pause_multiplier": 1.0,
+      "voice_fallbacks": []
+    },
+    "tts_options": {
+      "engine": "pyttsx3",
+      "fallback_engine": "system",
+      "use_neural_voice": false,
+      "cache_tts_output": true,
+      "max_tts_cache_size_mb": 50
+    }
   },
   "recognition": {
     "timeout": 10,
-    "phrase_time_limit": 5
+    "phrase_time_limit": 5,
+    "energy_threshold": 4000,
+    "dynamic_energy_threshold": true,
+    "dynamic_energy_adjustment_ratio": 1.5,
+    "pause_threshold": 0.8,
+    "non_speaking_duration": 0.5,
+    "phrase_threshold": 0.3,
+    "record_timeout": 3,
+    "engine": "google",
+    "fallback_engine": "sphinx",
+    "supported_engines": [
+      "google",
+      "sphinx",
+      "whisper",
+      "azure"
+    ],
+    "language": "en-US",
+    "supported_languages": [
+      "en-US",
+      "en-GB",
+      "es-ES",
+      "fr-FR",
+      "de-DE"
+    ],
+    "accent_adaptation": false,
+    "background_noise_reduction": {
+      "enabled": true,
+      "level": "medium"
+    },
+    "advanced": {
+      "sample_rate": 16000,
+      "sample_width": 2,
+      "channels": 1,
+      "chunk_size": 1024,
+      "calibration_duration": 1.0,
+      "retry_on_failure": true,
+      "max_retries": 3
+    },
+    "profanity_filter": false
+  },
+  "wake_word": {
+    "enabled": true,
+    "primary": "hey assistant",
+    "alternatives": [
+      "hello assistant",
+      "ok assistant"
+    ],
+    "activation_threshold": 0.75,
+    "detection_sensitivity": "medium",
+    "engine": "keyword",
+    "continuous_listening_timeout": 30,
+    "feedback": {
+      "audio": true,
+      "visual": true,
+      "haptic": false,
+      "activation_sound": "default"
+    },
+    "ambient_noise_adaptation": true,
+    "speaker_verification": {
+      "enabled": false,
+      "security_level": "medium",
+      "allowed_speakers": []
+    }
+  },
+  "audio": {
+    "input": {
+      "device_index": null,
+      "preferred_device": null,
+      "fallback_device": "default",
+      "auto_select": true,
+      "channels": 1,
+      "sample_rate": 16000,
+      "sample_width": 2
+    },
+    "output": {
+      "device_index": null,
+      "preferred_device": null,
+      "fallback_device": "default",
+      "auto_select": true
+    },
+    "processing": {
+      "noise_reduction": true,
+      "automatic_gain_control": true,
+      "echo_cancellation": true,
+      "silence_detection": true
+    }
   },
   "formatting": {
     "use_ssml": false,
@@ -21,7 +166,41 @@
       "caution",
       "important",
       "note"
-    ]
+    ],
+    "punctuation_pauses": {
+      ".": 700,
+      ",": 300,
+      ";": 500,
+      ":": 500,
+      "?": 700,
+      "!": 700,
+      "-": 300
+    },
+    "number_formatting": {
+      "read_as_digits": [
+        "phone",
+        "pin",
+        "code"
+      ],
+      "spell_out": [
+        "serial",
+        "id",
+        "password"
+      ],
+      "read_as_number": [
+        "price",
+        "quantity",
+        "year"
+      ]
+    },
+    "abbreviations": {
+      "expand": true,
+      "custom_expansions": {
+        "Dr.": "Doctor",
+        "Mr.": "Mister",
+        "St.": "Street"
+      }
+    }
   },
   "rag": {
     "model_name": "all-MiniLM-L6-v2",
@@ -29,22 +208,99 @@
     "top_k": 3,
     "relevance_threshold": 0.6,
     "chunk_size": 1000,
-    "chunk_overlap": 200
+    "chunk_overlap": 200,
+    "advanced": {
+      "vector_dimension": 384,
+      "similarity_metric": "cosine",
+      "use_gpu": "auto",
+      "batch_size": 32,
+      "normalize_embeddings": true,
+      "reranking": {
+        "enabled": false,
+        "model": null,
+        "top_n": 10
+      }
+    },
+    "sources": {
+      "document_types": [
+        "pdf",
+        "txt",
+        "docx",
+        "html"
+      ],
+      "update_interval_hours": 24,
+      "auto_refresh": false
+    }
   },
   "embedding_cache": {
     "size_limit": 10000,
-    "enable_analytics": true
+    "enable_analytics": true,
+    "persistent": true,
+    "storage_path": "data/cache/embeddings",
+    "expiration_days": 30,
+    "compression": true
   },
   "API_SETTINGS": {
     "GROQ_API_KEY": "",
     "GROQ_MODEL": "llama3-8b-8192",
-    "GROQ_API_BASE": "https://api.groq.com/openai/v1"
+    "GROQ_API_BASE": "https://api.groq.com/openai/v1",
+    "max_tokens": 2048,
+    "temperature": 0.7,
+    "timeout": 60,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "retry": {
+      "enabled": true,
+      "max_retries": 3,
+      "backoff_factor": 2.0
+    },
+    "fallback": {
+      "enabled": true,
+      "models": [
+        "gemma-7b-it",
+        "mixtral-8x7b"
+      ]
+    },
+    "streaming": true,
+    "local_inference": {
+      "enabled": false,
+      "model_path": null,
+      "device": "cpu",
+      "token_limit": 1024
+    }
   },
   "logging": {
     "log_dir": "logs",
     "log_level": "INFO",
     "enable_console": true,
     "max_log_files": 10,
-    "max_file_size_mb": 10
+    "max_file_size_mb": 10,
+    "archive_settings": {
+      "enabled": true,
+      "archive_dir": "logs/archives",
+      "rotation_interval_days": 7,
+      "compression_level": 6,
+      "retain_months": 6
+    },
+    "log_format": "json",
+    "components": {
+      "recognition": "INFO",
+      "tts": "INFO",
+      "rag": "INFO",
+      "api": "INFO",
+      "wake_word": "DEBUG"
+    }
+  },
+  "system": {
+    "monitoring_interval_seconds": 60,
+    "startup_sound": true,
+    "auto_update": false,
+    "memory_limit_mb": 1024,
+    "timeout_seconds": 300,
+    "accessibility": {
+      "high_contrast": false,
+      "larger_text": false,
+      "screen_reader_optimization": false
+    }
   }
 }
