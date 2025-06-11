@@ -64,7 +64,8 @@ except ImportError:
 # For document processing capabilities
 try:
     # Try to import document processing libraries
-    from langchain.document_loaders import PyPDFLoader, DirectoryLoader, TextLoader
+    import pdfplumber
+    from langchain.document_loaders import DirectoryLoader, TextLoader
     from langchain.text_splitter import RecursiveCharacterTextSplitter
     HAVE_DOCUMENT_PROCESSING = True
 except ImportError:
@@ -79,6 +80,28 @@ class ContextSerializationError(Exception):
 class DocumentProcessingError(Exception):
     """Exception raised for document processing errors."""
     pass
+
+
+class PDFPlumberLoader:
+    """Custom PDF loader using pdfplumber."""
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        
+    def load(self):
+        """Load and extract text from PDF using pdfplumber."""
+        documents = []
+        with pdfplumber.open(self.file_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if text:
+                    documents.append({
+                        'text': text,
+                        'metadata': {
+                            'source': self.file_path,
+                            'page': i + 1
+                        }
+                    })
+        return documents
 
 
 class ContextRetriever:
@@ -139,7 +162,7 @@ class ContextRetriever:
             )
             
             # Initialize PDF loader
-            self.pdf_loader = PyPDFLoader
+            self.pdf_loader = PDFPlumberLoader
             
         except Exception as e:
             self.logger.error(f"Error initializing document processor: {e}")

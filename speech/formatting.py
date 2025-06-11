@@ -92,10 +92,48 @@ class VoiceResponseFormatter:
         for pattern, replacement in self.number_formats.items():
             text = re.sub(pattern, replacement, text)
             
-        # Apply default number formatting
+        # Format decimal numbers
         text = re.sub(r'(\d+)\.(\d+)', r'\1 point \2', text)
-        text = re.sub(r'(\d+)-(\d+)(?!\w)', r'\1 to \2', text)
+        
+        # Format number ranges (e.g., "5,000-7,500")
+        def format_range(match):
+            start = match.group(1).replace(',', '')
+            end = match.group(2).replace(',', '')
+            return f"{self._format_large_number(start)} to {self._format_large_number(end)}"
+        text = re.sub(r'(\d+(?:,\d+)*)-(\d+(?:,\d+)*)(?!\w)', format_range, text)
+        
+        # Format large numbers with commas
+        text = re.sub(r'(\d+(?:,\d+)*)', lambda m: self._format_large_number(m.group(1)), text)
+        
         return text
+        
+    def _format_large_number(self, num_str: str) -> str:
+        """Format a large number for speech.
+        
+        Args:
+            num_str: Number string that may contain commas
+            
+        Returns:
+            Formatted number string for speech
+        """
+        # Remove commas and convert to integer
+        num = int(num_str.replace(',', ''))
+        
+        # Format based on size
+        if num >= 1000000:
+            millions = num // 1000000
+            remainder = num % 1000000
+            if remainder == 0:
+                return f"{millions} million"
+            return f"{millions} million {self._format_large_number(str(remainder))}"
+        elif num >= 1000:
+            thousands = num // 1000
+            remainder = num % 1000
+            if remainder == 0:
+                return f"{thousands} thousand"
+            return f"{thousands} thousand {self._format_large_number(str(remainder))}"
+        else:
+            return str(num)
 
     def format_units(self, text):
         """Format units for natural speech."""
@@ -165,6 +203,15 @@ if __name__ == "__main__":
     WARNING: Never start the engine without oil or damage to the engine can occur.
 
     The OBD-II system may trigger a code P0300 if oil quality is poor.
+
+    Additional information:
+    - The engine produces 270hp at 5,500rpm
+    - The vehicle has a 3.5L V6 engine
+    - The temperature should be between 195°F and 220°F
+    - The oil change interval is 5,000-7,500 miles
+    - The fuel tank capacity is 15.5 gallons
+    - The vehicle weighs 3,500 pounds
+    - The engine displacement is 3,456 cubic centimeters
     """
     formatted = formatter.format_response(test_input)
     print("Original text:")
