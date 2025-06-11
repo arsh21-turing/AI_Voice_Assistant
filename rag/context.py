@@ -177,6 +177,49 @@ class ContextRetriever:
         except Exception as e:
             self.logger.error(f"Error in initial document processing: {e}")
     
+    def retrieve(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Retrieve relevant context chunks for a query.
+        
+        Args:
+            query: The query to retrieve context for
+            top_k: Number of results to retrieve (defaults to config value)
+            
+        Returns:
+            List of context chunks with text, metadata, and relevance scores
+        """
+        try:
+            if not query:
+                return []
+                
+            # Use default top_k if not provided
+            if top_k is None:
+                top_k = self.default_top_k
+                
+            # Search vector store
+            results = self.vector_store.search(query, top_k=top_k)
+            
+            if not results:
+                return []
+                
+            # Format results
+            context_chunks = []
+            for result in results:
+                chunk = {
+                    'text': result.get('text', ''),
+                    'metadata': result.get('metadata', {}),
+                    'score': result.get('score', 0.0)
+                }
+                context_chunks.append(chunk)
+            
+            # Update recent contexts
+            self._update_recent_contexts(query, context_chunks)
+            
+            return context_chunks
+            
+        except Exception as e:
+            self.logger.error(f"Error retrieving context: {e}")
+            return []
+    
     def retrieve_context(self, 
                         query: str, 
                         top_k: Optional[int] = None, 
